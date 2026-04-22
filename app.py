@@ -20,7 +20,6 @@ WEIBO_AUTHORIZE_URL = "https://api.weibo.com/oauth2/authorize"
 WEIBO_ACCESS_TOKEN_URL = "https://api.weibo.com/oauth2/access_token"
 WEIBO_USER_INFO_URL = "https://api.weibo.com/2/users/show.json"
 
-# 调试阶段用：只保存最近一次授权结果
 LATEST_AUTH: dict[str, Any] = {}
 
 
@@ -36,7 +35,7 @@ def html_page(title: str, body: str) -> HTMLResponse:
           <style>
             body {{
               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-              max-width: 860px;
+              max-width: 960px;
               margin: 48px auto;
               padding: 0 20px;
               line-height: 1.7;
@@ -56,6 +55,7 @@ def html_page(title: str, body: str) -> HTMLResponse:
               color: white !important;
               text-decoration: none;
               margin-right: 12px;
+              margin-bottom: 12px;
             }}
             .btn.secondary {{
               background: #4b5563;
@@ -84,8 +84,17 @@ def html_page(title: str, body: str) -> HTMLResponse:
               color: #b45309;
               font-weight: 600;
             }}
+            .danger {{
+              color: #b91c1c;
+              font-weight: 600;
+            }}
             ul {{
               padding-left: 20px;
+            }}
+            hr {{
+              border: none;
+              border-top: 1px solid #e5e7eb;
+              margin: 24px 0;
             }}
           </style>
         </head>
@@ -145,8 +154,12 @@ async def home() -> HTMLResponse:
 
     body = f"""
     <h1>微博授权测试页</h1>
-    <p>当前回调地址：</p>
+
+    <p>当前服务端读取到的回调地址：</p>
     <p><code>{WEIBO_REDIRECT_URI or "未配置"}</code></p>
+
+    <p>当前服务端生成的实际授权链接：</p>
+    <pre>{auth_url}</pre>
 
     <p class="{"ok" if env_ok else "warn"}">
       {"环境变量已配置，可以发起授权。" if env_ok else "环境变量未配完整，请先配置 Vercel 环境变量。"}
@@ -156,9 +169,10 @@ async def home() -> HTMLResponse:
       <a class="btn" href="{auth_url}">发起微博授权</a>
       <a class="btn secondary" href="/success">查看成功页</a>
       <a class="btn secondary" href="/weibo/me">查看当前授权用户信息</a>
+      <a class="btn secondary" href="/health">查看健康检查</a>
     </p>
 
-    <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;" />
+    <hr />
 
     <h2>最近一次授权状态</h2>
     <ul>
@@ -167,7 +181,8 @@ async def home() -> HTMLResponse:
     </ul>
 
     <p class="muted">
-      提示：成功授权后会自动跳转到干净页面，避免刷新 callback 页面导致旧 code 重复使用。
+      调试 redirect_uri_mismatch 时，先核对上面这两项：
+      “当前服务端读取到的回调地址”和“当前服务端生成的实际授权链接”。
     </p>
     """
     return html_page("Weibo OAuth Demo", body)
@@ -200,6 +215,9 @@ async def weibo_callback(
 
     ensure_env_ready()
 
+    print("TOKEN EXCHANGE CODE:", code)
+    print("TOKEN EXCHANGE REDIRECT_URI:", WEIBO_REDIRECT_URI)
+
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
@@ -221,9 +239,20 @@ async def weibo_callback(
         return html_page("换 token 失败", body)
 
     if response.status_code != 200:
+        print(
+            "WEIBO TOKEN ERROR:",
+            {
+                "redirect_uri_used": WEIBO_REDIRECT_URI,
+                "status_code": response.status_code,
+                "response_text": response.text,
+            },
+        )
         body = f"""
         <h1>微博返回异常</h1>
-        <p>HTTP 状态码：<code>{response.status_code}</code></p>
+        <p class="danger">HTTP 状态码：<code>{response.status_code}</code></p>
+        <p>本次服务端用于换 token 的 redirect_uri：</p>
+        <pre>{WEIBO_REDIRECT_URI}</pre>
+        <p>微博返回内容：</p>
         <pre>{response.text}</pre>
         <p><a class="btn" href="/">返回首页</a></p>
         """
@@ -287,7 +316,7 @@ async def success() -> HTMLResponse:
     </p>
 
     <p class="muted">
-      说明：这里不明文展示完整 token，避免你截图或刷新时泄露敏感信息。
+      这里不明文展示完整 token，避免截图泄露或刷新重复使用旧 code。
     </p>
     """
     return html_page("授权成功", body)
@@ -374,6 +403,7 @@ async def health() -> JSONResponse:
             "has_client_secret": bool(WEIBO_CLIENT_SECRET),
             "has_redirect_uri": bool(WEIBO_REDIRECT_URI),
             "redirect_uri": WEIBO_REDIRECT_URI,
+            "authorize_url": build_authorize_url(),
             "has_latest_auth": bool(LATEST_AUTH),
         }
     )
